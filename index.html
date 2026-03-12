@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fastned Italy — Station Deployment Planner</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=DM+Sans:ital,wght@0,400;0,500;0,600;0,700&display=swap" rel="stylesheet">
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}body{font-family:'DM Sans',system-ui,sans-serif;background:#FAFAF8}input[type="number"]{-moz-appearance:textfield}input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}::-webkit-scrollbar{height:6px;width:6px}::-webkit-scrollbar-track{background:#f0f0f0;border-radius:3px}::-webkit-scrollbar-thumb{background:#ccc;border-radius:3px}::-webkit-scrollbar-thumb:hover{background:#aaa}
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const{useState,useCallback,useMemo,useRef}=React;
+const DEF_ACT=[{id:"feasibility",name:"Feasibility",lead:4,buffer:0,cost:4000,dep:"Land contract signed"},{id:"permitting",name:"Permitting",lead:26,buffer:4,cost:8000,dep:"Feasibility completed"},{id:"grid",name:"Grid Connection",lead:52,buffer:26,cost:2000,dep:"Feasibility completed"},{id:"cw",name:"Civil & Electrical Works",lead:8,buffer:5,cost:150000,dep:"Permitting completed"},{id:"commissioning",name:"Commissioning",lead:1,buffer:0,cost:1000,dep:"Grid + CW complete"}];
+const DEF_PROC=[{id:"substation",name:"Substation/Transformer",origin:"Italy (local)",lead:10,buffer:1,cost:150000,dep:"CW 20%",trigger:.2},{id:"chargers",name:"Chargers",origin:"NL / Italy",lead:6,buffer:1,cost:240000,dep:"CW 20%",trigger:.2},{id:"electrical",name:"Electrical Items",origin:"Italy (local)",lead:4,buffer:1,cost:50000,dep:"CW 20%",trigger:.2},{id:"canopy",name:"Canopy Material",origin:"NL (Fastned)",lead:6,buffer:1,cost:150000,dep:"CW 30%",trigger:.3},{id:"signage",name:"Signage & Branding",origin:"NL (Fastned)",lead:2,buffer:0,cost:10000,dep:"CW 50%",trigger:.5}];
+const DEF_ST=[{id:"IT-01",name:"Milano Est",goLive:"2026-07-15"},{id:"IT-02",name:"Roma Nord",goLive:"2026-06-30"},{id:"IT-03",name:"Firenze Sud",goLive:"2026-08-01"},{id:"IT-04",name:"Torino Ovest",goLive:"2026-09-01"},{id:"IT-05",name:"Bologna Centro",goLive:"2026-07-01"},{id:"IT-06",name:"Napoli Est",goLive:"2026-08-15"},{id:"IT-07",name:"Verona Nord",goLive:"2026-09-15"},{id:"IT-08",name:"Genova Porto",goLive:"2026-10-01"},{id:"IT-09",name:"Padova Sud",goLive:"2026-08-01"},{id:"IT-10",name:"Bari Ovest",goLive:"2026-10-15"},{id:"IT-11",name:"Brescia Est",goLive:"2027-01-15"},{id:"IT-12",name:"Catania Nord",goLive:"2027-02-01"},{id:"IT-13",name:"Perugia Centro",goLive:"2027-03-01"},{id:"IT-14",name:"Trieste Est",goLive:"2027-03-15"},{id:"IT-15",name:"Cagliari Sud",goLive:"2027-04-01"}];
+
+function computeSchedule(act,proc){const f=act.find(a=>a.id==="feasibility"),p=act.find(a=>a.id==="permitting"),g=act.find(a=>a.id==="grid"),c=act.find(a=>a.id==="cw"),co=act.find(a=>a.id==="commissioning");const fS=0,fE=fS+f.lead+f.buffer,pS=fE,pE=pS+p.lead+p.buffer,gS=fE,gE=gS+g.lead+g.buffer,cS=pE,cE=cS+c.lead+c.buffer,coS=Math.max(gE,cE),coE=coS+co.lead+co.buffer;
+const aS=[{...f,start:fS,leadEnd:fS+f.lead,end:fE},{...p,start:pS,leadEnd:pS+p.lead,end:pE},{...g,start:gS,leadEnd:gS+g.lead,end:gE},{...c,start:cS,leadEnd:cS+c.lead,end:cE},{...co,start:coS,leadEnd:coS+co.lead,end:coE}];
+const pS2=proc.map(pr=>{const arr=cS+Math.ceil(c.lead*pr.trigger),oS=arr-pr.lead;return{...pr,start:oS,leadEnd:oS+pr.lead,end:oS+pr.lead+pr.buffer,arrivalTarget:arr}});
+return{actSchedule:aS,procSchedule:pS2,totalCost:[...act,...proc].reduce((s,a)=>s+a.cost,0),cwStart:cS,cwEnd:cS+c.lead,cwBufferedEnd:cE,commEnd:coE};}
+
+function computeCashflows(stations,actSch,procSch,commEnd,aT,pT){
+const pays=[];
+stations.forEach(st=>{const gl=new Date(st.goLive),ps=new Date(gl);ps.setDate(ps.getDate()-commEnd*7);
+const w2d=wk=>{const d=new Date(ps);d.setDate(d.getDate()+wk*7);return d};const d2m=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+actSch.forEach(a=>{if(a.cost<=0)return;const sd=w2d(a.start),ed=w2d(a.end),p1=Math.round(a.cost*aT.s);
+if(p1>0)pays.push({sid:st.id,sn:st.name,act:a.name,amt:p1,month:d2m(sd),type:"activity"});
+const p2=a.cost-p1;if(p2>0)pays.push({sid:st.id,sn:st.name,act:a.name,amt:p2,month:d2m(ed),type:"activity"})});
+procSch.forEach(p=>{if(p.cost<=0)return;const od=w2d(p.start),dd=w2d(p.leadEnd),p1=Math.round(p.cost*pT.o);
+if(p1>0)pays.push({sid:st.id,sn:st.name,act:p.name,amt:p1,month:d2m(od),type:"procurement"});
+const p2=p.cost-p1;if(p2>0)pays.push({sid:st.id,sn:st.name,act:p.name,amt:p2,month:d2m(dd),type:"procurement"})})});
+const mm={};pays.forEach(p=>{if(!mm[p.month])mm[p.month]={month:p.month,total:0,activity:0,procurement:0,stations:{},details:[]};mm[p.month].total+=p.amt;mm[p.month][p.type]+=p.amt;mm[p.month].stations[p.sid]=(mm[p.month].stations[p.sid]||0)+p.amt;mm[p.month].details.push(p)});
+const months=Object.values(mm).sort((a,b)=>a.month.localeCompare(b.month));let cum=0;months.forEach(m=>{cum+=m.total;m.cumulative=cum});
+const st2={};pays.forEach(p=>{if(!st2[p.sid])st2[p.sid]={id:p.sid,name:p.sn,total:0,activity:0,procurement:0};st2[p.sid].total+=p.amt;st2[p.sid][p.type]+=p.amt});
+return{months,stationTotals:Object.values(st2),grandTotal:cum};}
+
+const AC={feasibility:{m:"#2980B9",l:"#AED6F1"},permitting:{m:"#8E44AD",l:"#D2B4DE"},grid:{m:"#D35400",l:"#F0B27A"},cw:{m:"#27AE60",l:"#A9DFBF"},commissioning:{m:"#C0392B",l:"#F1948A"}};
+const PC={substation:{m:"#16A085",l:"#A3E4D7"},chargers:{m:"#E74C3C",l:"#F5B7B1"},electrical:{m:"#F39C12",l:"#FAD7A0"},canopy:{m:"#7D3C98",l:"#D2B4DE"},signage:{m:"#2C3E50",l:"#AEB6BF"}};
+
+function GB({start,leadEnd,end,totalWeeks,mc,lc,label}){const s=(start/totalWeeks)*100,lw=((leadEnd-start)/totalWeeks)*100,bw=((end-leadEnd)/totalWeeks)*100;
+return<div style={{position:"relative",height:26,width:"100%"}}><div style={{position:"absolute",left:`${s}%`,width:`${lw}%`,height:"100%",background:mc,borderRadius:bw>0?"4px 0 0 4px":"4px",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"#fff",fontWeight:600,boxShadow:"0 1px 3px rgba(0,0,0,.15)",overflow:"hidden"}}>{lw>4&&<span style={{whiteSpace:"nowrap",padding:"0 3px"}}>{label}</span>}</div>
+{bw>0.1&&<div style={{position:"absolute",left:`${s+lw}%`,width:`${bw}%`,height:"100%",background:`repeating-linear-gradient(45deg,${lc},${lc} 3px,${mc}33 3px,${mc}33 6px)`,borderRadius:"0 4px 4px 0",border:`1px solid ${mc}44`}}/>}</div>}
+
+function WS({tw,cs,ce}){const step=tw>60?10:tw>30?5:2;const t=[];for(let w=0;w<=tw;w+=step)t.push(w);
+return<div style={{position:"relative",height:20,width:"100%",borderBottom:"1px solid #ddd",marginBottom:2}}>{cs!=null&&<div style={{position:"absolute",left:`${(cs/tw)*100}%`,width:`${((ce-cs)/tw)*100}%`,height:"100%",background:"#27AE6012",borderLeft:"1px dashed #27AE60",borderRight:"1px dashed #27AE60"}}/>}
+{t.map(w=><div key={w} style={{position:"absolute",left:`${(w/tw)*100}%`,top:0,height:"100%",borderLeft:"1px solid #e8e8e8",display:"flex",alignItems:"flex-end",paddingLeft:2}}><span style={{fontSize:8,color:"#aaa",fontFamily:"'JetBrains Mono'"}}>W{w}</span></div>)}</div>}
+
+function Inp({value,onChange,unit,small}){return<div style={{display:"flex",alignItems:"center",gap:4}}><input type="number" min={0} value={value} onChange={e=>onChange(Number(e.target.value))} style={{width:small?52:72,padding:"4px 6px",border:"1.5px solid #ddd",borderRadius:5,fontSize:12,fontFamily:"'JetBrains Mono'",color:"#2563EB",fontWeight:600,background:"#FAFAFA",outline:"none"}} onFocus={e=>e.target.style.borderColor="#FFC800"} onBlur={e=>e.target.style.borderColor="#ddd"}/>{unit&&<span style={{fontSize:10,color:"#999"}}>{unit}</span>}</div>}
+
+function dCSV(data,fn){const h=Object.keys(data[0]);const csv=[h.join(","),...data.map(r=>h.map(k=>{const v=r[k];return typeof v==="string"&&v.includes(",")?`"${v}"`:v}).join(","))].join("\n");const b=new Blob([csv],{type:"text/csv"});const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download=fn;a.click()}
+const fmt=n=>n.toLocaleString("de-DE");const fK=n=>n>=1e6?`${(n/1e6).toFixed(1)}M`:`${Math.round(n/1e3)}k`;
+
+function App(){
+const[act,sA]=useState(DEF_ACT),[proc,sP]=useState(DEF_PROC),[snaps,sSn]=useState([]),[tab,sT]=useState("gantt"),[sts,sSt]=useState(DEF_ST);
+const[aTerms,sAT]=useState({s:30,e:70}),[pTerms,sPT]=useState({o:50,d:50}),[expM,sEM]=useState(null);const fR=useRef(null);
+const uA=useCallback((id,f,v)=>sA(p=>p.map(a=>a.id===id?{...a,[f]:v}:a)),[]);
+const uP=useCallback((id,f,v)=>sP(p=>p.map(a=>a.id===id?{...a,[f]:v}:a)),[]);
+const sc=useMemo(()=>computeSchedule(act,proc),[act,proc]);
+const{actSchedule:aS,procSchedule:pS,totalCost:tC,cwStart:cS,cwEnd:cE,cwBufferedEnd:cBE,commEnd:coE}=sc;
+const cwL=act.find(a=>a.id==="cw").lead;
+const cf=useMemo(()=>computeCashflows(sts,aS,pS,coE,{s:aTerms.s/100},{o:pTerms.o/100}),[sts,aS,pS,coE,aTerms,pTerms]);
+
+const saveSn=()=>{const ts=new Date().toLocaleTimeString();sSn(p=>[...p,{id:Date.now(),label:`Scenario ${p.length+1} (${ts})`,tw:coE,tc:tC,as:aS.map(a=>({n:a.name,l:a.lead,b:a.buffer})),ps:pS.map(p=>({n:p.name,l:p.lead,b:p.buffer}))}])};
+
+const handleUp=e=>{const file=e.target.files[0];if(!file)return;const r=new FileReader();r.onload=ev=>{const lines=ev.target.result.split("\n").filter(l=>l.trim());if(lines.length<2)return;const hdr=lines[0].split(",").map(h=>h.trim().toLowerCase());const iI=hdr.findIndex(h=>h.includes("id")),nI=hdr.findIndex(h=>h.includes("name")||h.includes("station")),dI=hdr.findIndex(h=>h.includes("go")||h.includes("live")||h.includes("date")||h.includes("target"));if(dI<0)return alert("CSV needs a 'go-live' or 'target' or 'date' column");const ps=[];for(let i=1;i<lines.length;i++){const c=lines[i].split(",").map(c=>c.trim().replace(/"/g,""));if(c.length<=dI||!c[dI]||c[dI].length<8)continue;ps.push({id:iI>=0?c[iI]:`ST-${i}`,name:nI>=0?c[nI]:`Station ${i}`,goLive:c[dI]})}if(ps.length>0)sSt(ps)};r.readAsText(file);e.target.value=""};
+
+const bs=a=>({padding:"12px 18px",border:"none",background:"none",cursor:"pointer",fontSize:13,fontWeight:a?700:500,color:a?"#2D2D2D":"#999",borderBottom:a?"3px solid #FFC800":"3px solid transparent"});
+const cs=(bg="#fff")=>({background:bg,borderRadius:12,padding:22,boxShadow:"0 1px 8px rgba(0,0,0,.05)",border:"1px solid #eee"});
+const xB=fn=><button onClick={fn} style={{padding:"7px 14px",background:"#2D2D2D",color:"#FFC800",border:"none",borderRadius:6,fontSize:11,fontWeight:600,cursor:"pointer"}}>↓ CSV</button>;
+
+return<div style={{minHeight:"100vh",background:"#FAFAF8",color:"#1a1a1a"}}>
+{/* HEADER */}
+<div style={{background:"linear-gradient(135deg,#2D2D2D,#1a1a1a)",padding:"20px 28px",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
+<div style={{display:"flex",alignItems:"center",gap:14}}><div style={{width:34,height:34,background:"#FFC800",borderRadius:6,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>⚡</div><div><h1 style={{margin:0,fontSize:18,fontWeight:700,color:"#FFC800"}}>Fastned Italy</h1><p style={{margin:0,fontSize:11,color:"#888",letterSpacing:".06em",textTransform:"uppercase"}}>Station Deployment Planner</p></div></div>
+<div style={{display:"flex",gap:20,alignItems:"center"}}>
+<div style={{textAlign:"right"}}><div style={{fontSize:10,color:"#777",textTransform:"uppercase"}}>Duration</div><div style={{fontSize:20,fontWeight:700,color:"#FFC800",fontFamily:"'JetBrains Mono'"}}>{coE} wks</div></div>
+<div style={{width:1,height:32,background:"#444"}}/>
+<div style={{textAlign:"right"}}><div style={{fontSize:10,color:"#777",textTransform:"uppercase"}}>Cost/Station</div><div style={{fontSize:20,fontWeight:700,color:"#fff",fontFamily:"'JetBrains Mono'"}}>{fmt(tC)} €</div></div>
+<div style={{width:1,height:32,background:"#444"}}/>
+<div style={{textAlign:"right"}}><div style={{fontSize:10,color:"#777",textTransform:"uppercase"}}>Stations</div><div style={{fontSize:20,fontWeight:700,color:"#FFC800",fontFamily:"'JetBrains Mono'"}}>{sts.length}</div></div>
+</div></div>
+
+{/* TABS */}
+<div style={{display:"flex",gap:0,padding:"0 28px",background:"#fff",borderBottom:"1px solid #e5e5e5",overflowX:"auto"}}>
+{[["gantt","📊 Gantt"],["inputs","⚙️ Parameters"],["costs","💰 Costs"],["cashflow","📈 Cash Flow"],["compare","🔄 Compare"]].map(([k,l])=><button key={k} onClick={()=>sT(k)} style={bs(tab===k)}>{l}</button>)}</div>
+
+<div style={{padding:"20px 28px",maxWidth:1400,margin:"0 auto"}}>
+
+{/* GANTT */}
+{tab==="gantt"&&<div style={{display:"flex",flexDirection:"column",gap:24}}>
+<div style={cs()}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",mb:14,marginBottom:14}}><div><h2 style={{margin:0,fontSize:15,fontWeight:700}}>Project Activities Timeline</h2><p style={{margin:"3px 0 0",fontSize:11,color:"#999"}}>Solid = lead time · Hatched = buffer</p></div>{xB(()=>dCSV(aS.map(a=>({Activity:a.name,"Lead":a.lead,"Buffer":a.buffer,"Start":a.start,"End":a.end,"Cost":a.cost})),"activities.csv"))}</div>
+<WS tw={coE+2} cs={cS} ce={cE}/><div style={{display:"flex",flexDirection:"column",gap:5}}>{aS.map(a=><div key={a.id} style={{display:"flex",alignItems:"center",gap:10}}><div style={{width:170,fontSize:11,fontWeight:600,color:"#333",flexShrink:0,textAlign:"right",paddingRight:6}}>{a.name}<span style={{display:"block",fontSize:9,color:"#aaa",fontWeight:400}}>W{a.start}–W{a.end} ({a.lead}+{a.buffer}w)</span></div><div style={{flex:1}}><GB start={a.start} leadEnd={a.leadEnd} end={a.end} totalWeeks={coE+2} mc={AC[a.id]?.m} lc={AC[a.id]?.l} label={`${a.lead}w`}/></div></div>)}</div>
+<div style={{display:"flex",gap:14,marginTop:14,flexWrap:"wrap"}}>{[{l:"Feasibility Done",w:aS[0].end},{l:"Permit Granted",w:aS[1].end},{l:"CW Start",w:cS},{l:"Grid Done",w:aS[2].end},{l:"GO-LIVE",w:coE}].map(m=><span key={m.l} style={{fontSize:10,color:"#666",display:"flex",alignItems:"center",gap:3}}><span style={{display:"inline-block",width:7,height:7,background:"#C0392B",transform:"rotate(45deg)"}}/><b>W{m.w}</b> {m.l}</span>)}</div></div>
+
+<div style={cs("#F8F8F6")}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}><div><h2 style={{margin:0,fontSize:15,fontWeight:700}}>Procurement Timeline</h2><p style={{margin:"3px 0 0",fontSize:11,color:"#999"}}>Backward-scheduled · <span style={{color:"#27AE60",fontWeight:600}}>Green</span> = CW</p></div>{xB(()=>dCSV(pS.map(p=>({Material:p.name,"Lead":p.lead,"Buffer":p.buffer,"Order":p.start,"Delivery":p.leadEnd,"Cost":p.cost})),"procurement.csv"))}</div>
+{(()=>{const mn=Math.max(0,Math.min(...pS.map(p=>p.start))-2),mx=Math.max(cBE,...pS.map(p=>p.end))+2,rng=mx-mn;
+return<><WS tw={rng} cs={cS-mn} ce={cS+cwL-mn}/>
+<div style={{display:"flex",alignItems:"center",gap:10,marginBottom:3}}><div style={{width:170,fontSize:11,fontWeight:700,color:"#27AE60",flexShrink:0,textAlign:"right",paddingRight:6}}>Civil & Elec. Works<span style={{display:"block",fontSize:9,color:"#aaa",fontWeight:400}}>W{cS}–W{cBE}</span></div><div style={{flex:1,position:"relative"}}><GB start={cS-mn} leadEnd={cE-mn} end={cBE-mn} totalWeeks={rng} mc="#27AE60" lc="#A9DFBF" label="CW"/>{[.2,.3,.5].map(pc=>{const wk=cS+Math.ceil(cwL*pc);return<div key={pc} style={{position:"absolute",left:`${((wk-mn)/rng)*100}%`,top:-12,fontSize:8,color:"#27AE60",fontWeight:700,transform:"translateX(-50%)"}}>{Math.round(pc*100)}%</div>})}</div></div>
+<div style={{height:1,background:"#ddd",margin:"6px 0"}}/>
+<div style={{display:"flex",flexDirection:"column",gap:5}}>{pS.map(p=><div key={p.id} style={{display:"flex",alignItems:"center",gap:10}}><div style={{width:170,fontSize:11,fontWeight:600,color:"#333",flexShrink:0,textAlign:"right",paddingRight:6}}>{p.name}<span style={{display:"block",fontSize:9,color:"#aaa",fontWeight:400}}>Order W{p.start} → Del W{p.leadEnd}{p.buffer>0?` (+${p.buffer}w)`:""}</span></div><div style={{flex:1,position:"relative"}}><GB start={p.start-mn} leadEnd={p.leadEnd-mn} end={p.end-mn} totalWeeks={rng} mc={PC[p.id]?.m} lc={PC[p.id]?.l} label={`${p.lead}w`}/><div style={{position:"absolute",left:`${((p.arrivalTarget-mn)/rng)*100}%`,top:0,height:"100%",borderLeft:"2px dashed #C0392B",zIndex:5}}/></div></div>)}</div></>})()}
+</div></div>}
+
+{/* INPUTS */}
+{tab==="inputs"&&<div style={{display:"flex",flexDirection:"column",gap:20}}>
+<div style={cs()}><h2 style={{margin:"0 0 14px",fontSize:15,fontWeight:700}}>Project Activities</h2><div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}><thead><tr style={{borderBottom:"2px solid #eee"}}>{["Activity","Lead Time","Buffer","Cost (€)","Dependency"].map(h=><th key={h} style={{textAlign:"left",padding:"8px 10px",fontSize:10,color:"#888",textTransform:"uppercase",fontWeight:600}}>{h}</th>)}</tr></thead><tbody>{act.map(a=><tr key={a.id} style={{borderBottom:"1px solid #f0f0f0"}}><td style={{padding:"8px 10px",fontWeight:600}}><span style={{width:8,height:8,borderRadius:2,background:AC[a.id]?.m,display:"inline-block",marginRight:6}}/>{a.name}</td><td style={{padding:"8px 10px"}}><Inp value={a.lead} onChange={v=>uA(a.id,"lead",v)} unit="wks" small/></td><td style={{padding:"8px 10px"}}><Inp value={a.buffer} onChange={v=>uA(a.id,"buffer",v)} unit="wks" small/></td><td style={{padding:"8px 10px"}}><Inp value={a.cost} onChange={v=>uA(a.id,"cost",v)} unit="€"/></td><td style={{padding:"8px 10px",color:"#888",fontSize:11}}>{a.dep}</td></tr>)}</tbody></table></div></div>
+<div style={cs("#F8F8F6")}><h2 style={{margin:"0 0 14px",fontSize:15,fontWeight:700}}>Procurement Activities</h2><div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}><thead><tr style={{borderBottom:"2px solid #e5e5e0"}}>{["Material","Lead Time","Buffer","Cost (€)","CW Trigger","Origin"].map(h=><th key={h} style={{textAlign:"left",padding:"8px 10px",fontSize:10,color:"#888",textTransform:"uppercase",fontWeight:600}}>{h}</th>)}</tr></thead><tbody>{proc.map(p=><tr key={p.id} style={{borderBottom:"1px solid #eee"}}><td style={{padding:"8px 10px",fontWeight:600}}><span style={{width:8,height:8,borderRadius:2,background:PC[p.id]?.m,display:"inline-block",marginRight:6}}/>{p.name}</td><td style={{padding:"8px 10px"}}><Inp value={p.lead} onChange={v=>uP(p.id,"lead",v)} unit="wks" small/></td><td style={{padding:"8px 10px"}}><Inp value={p.buffer} onChange={v=>uP(p.id,"buffer",v)} unit="wks" small/></td><td style={{padding:"8px 10px"}}><Inp value={p.cost} onChange={v=>uP(p.id,"cost",v)} unit="€"/></td><td style={{padding:"8px 10px"}}><Inp value={Math.round(p.trigger*100)} onChange={v=>uP(p.id,"trigger",v/100)} unit="%" small/></td><td style={{padding:"8px 10px",color:"#888",fontSize:11}}>{p.origin}</td></tr>)}</tbody></table></div></div>
+</div>}
+
+{/* COSTS */}
+{tab==="costs"&&<div style={{display:"flex",gap:20,flexWrap:"wrap"}}>
+<div style={{...cs(),flex:"1 1 420px"}}><h2 style={{margin:"0 0 14px",fontSize:15,fontWeight:700}}>Cost Breakdown per Station</h2>
+{[...aS,...pS].sort((a,b)=>b.cost-a.cost).map(i=>{const pct=(i.cost/tC)*100,c=({...AC,...PC})[i.id]?.m||"#666";return<div key={i.id} style={{marginBottom:10}}><div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:2}}><span style={{fontWeight:600}}>{i.name}</span><span style={{fontFamily:"'JetBrains Mono'",fontWeight:600}}>{fmt(i.cost)} € <span style={{color:"#aaa",fontWeight:400}}>({pct.toFixed(1)}%)</span></span></div><div style={{height:16,background:"#f0f0f0",borderRadius:3}}><div style={{width:`${pct}%`,height:"100%",background:c,borderRadius:3,transition:"width .3s"}}/></div></div>})}
+<div style={{borderTop:"2px solid #2D2D2D",paddingTop:8,marginTop:10,display:"flex",justifyContent:"space-between"}}><span style={{fontSize:13,fontWeight:700}}>TOTAL</span><span style={{fontSize:13,fontWeight:700,fontFamily:"'JetBrains Mono'"}}>{fmt(tC)} €</span></div></div>
+<div style={{flex:"1 1 280px",display:"flex",flexDirection:"column",gap:14}}>
+{[{l:"Project Activities",items:aS,bg:"#fff"},{l:"Procurement",items:pS,bg:"#F8F8F6"}].map(cat=>{const ct=cat.items.reduce((s,i)=>s+i.cost,0);return<div key={cat.l} style={cs(cat.bg)}><div style={{display:"flex",justifyContent:"space-between"}}><h3 style={{margin:0,fontSize:13,fontWeight:700}}>{cat.l}</h3><span style={{fontSize:15,fontWeight:700,fontFamily:"'JetBrains Mono'",color:"#FFC800"}}>{fmt(ct)} €</span></div><div style={{fontSize:11,color:"#888",marginTop:2}}>{((ct/tC)*100).toFixed(1)}%</div><div style={{height:5,background:"#e0e0e0",borderRadius:3,marginTop:6}}><div style={{width:`${(ct/tC)*100}%`,height:"100%",background:"#FFC800",borderRadius:3}}/></div></div>})}
+<div style={{background:"#2D2D2D",borderRadius:12,padding:18,color:"#fff"}}><h3 style={{margin:"0 0 10px",fontSize:13,fontWeight:700,color:"#FFC800"}}>Key Metrics</h3>
+{[{l:"Procurement share",v:`${((pS.reduce((s,p)=>s+p.cost,0)/tC)*100).toFixed(1)}%`},{l:"Critical path",v:`${coE} weeks`},{l:"Binding constraint",v:sc.commEnd>cBE?"Grid Connection":"Civil Works"},{l:"15 stations total",v:`${fmt(tC*15)} €`}].map(m=><div key={m.l} style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:"1px solid #444",fontSize:11}}><span style={{color:"#aaa"}}>{m.l}</span><span style={{fontWeight:600,fontFamily:"'JetBrains Mono'"}}>{m.v}</span></div>)}</div></div>
+</div>}
+
+{/* CASH FLOW */}
+{tab==="cashflow"&&<div style={{display:"flex",flexDirection:"column",gap:20}}>
+{/* Controls */}
+<div style={{display:"flex",gap:16,flexWrap:"wrap",alignItems:"flex-end"}}>
+<div style={cs()}><h3 style={{margin:"0 0 10px",fontSize:13,fontWeight:700}}>Activity Payment Terms</h3>
+<div style={{display:"flex",gap:12,alignItems:"center"}}><Inp value={aTerms.s} onChange={v=>sAT({s:v,e:100-v})} unit="% start" small/><span style={{color:"#aaa"}}>/</span><Inp value={aTerms.e} onChange={v=>sAT({s:100-v,e:v})} unit="% end" small/></div>
+<p style={{fontSize:10,color:"#999",marginTop:6}}>e.g. 30/70 = 30% at start, 70% at completion</p></div>
+
+<div style={cs()}><h3 style={{margin:"0 0 10px",fontSize:13,fontWeight:700}}>Procurement Payment Terms</h3>
+<div style={{display:"flex",gap:12,alignItems:"center"}}><Inp value={pTerms.o} onChange={v=>sPT({o:v,d:100-v})} unit="% order" small/><span style={{color:"#aaa"}}>/</span><Inp value={pTerms.d} onChange={v=>sPT({o:100-v,d:v})} unit="% delivery" small/></div>
+<p style={{fontSize:10,color:"#999",marginTop:6}}>e.g. 50/50 = 50% at PO, 50% at delivery</p></div>
+
+<div style={cs()}><h3 style={{margin:"0 0 10px",fontSize:13,fontWeight:700}}>Station List</h3>
+<div style={{display:"flex",gap:8,alignItems:"center"}}><span style={{fontSize:12,color:"#666"}}>{sts.length} stations</span>
+<input ref={fR} type="file" accept=".csv" style={{display:"none"}} onChange={handleUp}/>
+<button onClick={()=>fR.current?.click()} style={{padding:"6px 14px",background:"#FFC800",color:"#2D2D2D",border:"none",borderRadius:6,fontSize:11,fontWeight:700,cursor:"pointer"}}>📁 Upload CSV</button>
+<button onClick={()=>sSt(DEF_ST)} style={{padding:"6px 14px",background:"#eee",color:"#666",border:"none",borderRadius:6,fontSize:11,fontWeight:600,cursor:"pointer"}}>Reset</button></div>
+<p style={{fontSize:10,color:"#999",marginTop:6}}>CSV: ID, Name, Go-Live (YYYY-MM-DD)</p></div></div>
+
+{/* Stations pills */}
+<div style={cs()}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}><h3 style={{margin:0,fontSize:13,fontWeight:700}}>Stations ({sts.length})</h3>{xB(()=>dCSV(sts.map(s=>({ID:s.id,Name:s.name,"Go-Live":s.goLive})),"stations.csv"))}</div>
+<div style={{display:"flex",flexWrap:"wrap",gap:6}}>{[...sts].sort((a,b)=>a.goLive.localeCompare(b.goLive)).map(s=><div key={s.id} style={{padding:"6px 12px",background:"#f5f5f5",borderRadius:6,fontSize:11,display:"flex",alignItems:"center",gap:6}}><span style={{fontWeight:700}}>{s.name}</span><span style={{color:"#888",fontFamily:"'JetBrains Mono'",fontSize:10}}>{s.goLive}</span><button onClick={()=>sSt(p=>p.filter(x=>x.id!==s.id))} style={{background:"none",border:"none",cursor:"pointer",color:"#ccc",fontSize:10}}>✕</button></div>)}</div></div>
+
+{/* KPIs */}
+<div style={{display:"flex",gap:16,flexWrap:"wrap"}}>
+{[{l:"Total Programme",v:`${fmt(cf.grandTotal)} €`,c:"#FFC800"},{l:"Peak Monthly",v:`${fmt(Math.max(...cf.months.map(m=>m.total),0))} €`,c:"#E74C3C"},{l:"Avg Monthly",v:`${fmt(Math.round(cf.grandTotal/(cf.months.length||1)))} €`,c:"#2980B9"},{l:"Timeline",v:`${cf.months.length} months`,c:"#27AE60"}].map(k=><div key={k.l} style={{flex:"1 1 180px",background:"#2D2D2D",borderRadius:10,padding:16,textAlign:"center"}}><div style={{fontSize:10,color:"#888",textTransform:"uppercase",letterSpacing:".06em"}}>{k.l}</div><div style={{fontSize:20,fontWeight:700,color:k.c,fontFamily:"'JetBrains Mono'",marginTop:4}}>{k.v}</div></div>)}</div>
+
+{/* Chart */}
+<div style={cs()}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}><div><h2 style={{margin:0,fontSize:15,fontWeight:700}}>Monthly Cash Flow</h2><p style={{margin:"3px 0 0",fontSize:11,color:"#999"}}>Click a bar to expand · <span style={{color:"#2980B9"}}>Blue</span> = Activities · <span style={{color:"#D35400"}}>Orange</span> = Procurement · <span style={{color:"#FFC800"}}>Yellow dashed</span> = Cumulative</p></div>
+{xB(()=>dCSV(cf.months.map(m=>({Month:m.month,Activity:m.activity,Procurement:m.procurement,Total:m.total,Cumulative:m.cumulative})),"cashflow.csv"))}</div>
+
+{(()=>{const mxT=Math.max(...cf.months.map(m=>m.total),1),mxC=cf.grandTotal||1;
+return<div style={{position:"relative"}}><div style={{display:"flex",alignItems:"flex-end",gap:2,height:220,padding:"0 0 30px"}}>
+{cf.months.map(m=>{const aH=(m.activity/mxT)*170,pH=(m.procurement/mxT)*170,isE=expM===m.month;
+return<div key={m.month} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",cursor:"pointer",minWidth:0}} onClick={()=>sEM(isE?null:m.month)}>
+<div style={{fontSize:8,fontFamily:"'JetBrains Mono'",color:"#888",marginBottom:2}}>{fK(m.total)}</div>
+<div style={{width:"100%",maxWidth:36,display:"flex",flexDirection:"column",borderRadius:"3px 3px 0 0",overflow:"hidden",border:isE?"2px solid #FFC800":"none",transition:"border .2s"}}>
+<div style={{height:aH,background:"#2980B9",transition:"height .3s"}}/>
+<div style={{height:pH,background:"#D35400",transition:"height .3s"}}/></div>
+<div style={{fontSize:7,color:"#999",marginTop:4,transform:"rotate(-50deg)",transformOrigin:"center",whiteSpace:"nowrap"}}>{m.month}</div></div>})}</div>
+<svg style={{position:"absolute",top:0,left:0,width:"100%",height:190,pointerEvents:"none"}}>
+<polyline fill="none" stroke="#FFC800" strokeWidth="2" strokeDasharray="4,2" points={cf.months.map((m,i)=>`${((i+.5)/cf.months.length)*100}%,${100-((m.cumulative/mxC)*85)}%`).join(" ")}/></svg>
+<div style={{display:"flex",justifyContent:"flex-end",fontSize:10,color:"#aaa"}}><span style={{fontFamily:"'JetBrains Mono'"}}>{fmt(cf.grandTotal)} € cumulative</span></div></div>})()}
+
+{/* Expanded month */}
+{expM&&cf.months.find(m=>m.month===expM)&&(()=>{const mo=cf.months.find(m=>m.month===expM);
+return<div style={{marginTop:16,padding:16,background:"#f8f8f6",borderRadius:8,border:"1px solid #eee"}}>
+<h4 style={{margin:"0 0 10px",fontSize:13,fontWeight:700}}>{expM} — {fmt(mo.total)} €</h4>
+<div style={{display:"flex",gap:20,flexWrap:"wrap"}}>
+<div style={{flex:"1 1 300px"}}><h5 style={{fontSize:11,color:"#888",marginBottom:6,textTransform:"uppercase"}}>By Station</h5>
+{Object.entries(mo.stations).sort((a,b)=>b[1]-a[1]).map(([sid,amt])=>{const st=sts.find(s=>s.id===sid);return<div key={sid} style={{display:"flex",justifyContent:"space-between",padding:"3px 0",borderBottom:"1px solid #eee",fontSize:11}}><span>{st?.name||sid}</span><span style={{fontFamily:"'JetBrains Mono'",fontWeight:600}}>{fmt(amt)} €</span></div>})}</div>
+<div style={{flex:"1 1 300px"}}><h5 style={{fontSize:11,color:"#888",marginBottom:6,textTransform:"uppercase"}}>By Activity</h5>
+{(()=>{const byA={};mo.details.forEach(d=>{byA[d.act]=(byA[d.act]||0)+d.amt});return Object.entries(byA).sort((a,b)=>b[1]-a[1]).map(([a,v])=><div key={a} style={{display:"flex",justifyContent:"space-between",padding:"3px 0",borderBottom:"1px solid #eee",fontSize:11}}><span>{a}</span><span style={{fontFamily:"'JetBrains Mono'",fontWeight:600}}>{fmt(v)} €</span></div>)})()}</div>
+</div></div>})()}
+</div>
+
+{/* Per-station table */}
+<div style={cs()}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}><h2 style={{margin:0,fontSize:15,fontWeight:700}}>Cost per Station</h2>{xB(()=>dCSV(cf.stationTotals.map(s=>({Station:s.name,Activity:s.activity,Procurement:s.procurement,Total:s.total})),"station_costs.csv"))}</div>
+<div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}><thead><tr style={{borderBottom:"2px solid #eee"}}>{["Station","Go-Live","Activities","Procurement","Total"].map(h=><th key={h} style={{textAlign:"left",padding:"8px 10px",fontSize:10,color:"#888",textTransform:"uppercase",fontWeight:600}}>{h}</th>)}</tr></thead>
+<tbody>{cf.stationTotals.sort((a,b)=>{const sa=sts.find(s=>s.id===a.id),sb=sts.find(s=>s.id===b.id);return(sa?.goLive||"").localeCompare(sb?.goLive||"")}).map(s=>{const st=sts.find(x=>x.id===s.id);return<tr key={s.id} style={{borderBottom:"1px solid #f0f0f0"}}><td style={{padding:"8px 10px",fontWeight:600}}>{s.name}</td><td style={{padding:"8px 10px",fontFamily:"'JetBrains Mono'",fontSize:11,color:"#888"}}>{st?.goLive}</td><td style={{padding:"8px 10px",fontFamily:"'JetBrains Mono'"}}>{fmt(s.activity)} €</td><td style={{padding:"8px 10px",fontFamily:"'JetBrains Mono'"}}>{fmt(s.procurement)} €</td><td style={{padding:"8px 10px",fontFamily:"'JetBrains Mono'",fontWeight:700}}>{fmt(s.total)} €</td></tr>})}</tbody></table></div></div>
+</div>}
+
+{/* COMPARE */}
+{tab==="compare"&&<div style={{display:"flex",flexDirection:"column",gap:16}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}><div><h2 style={{margin:0,fontSize:15,fontWeight:700}}>Scenario Comparison</h2></div>
+<div style={{display:"flex",gap:8}}><button onClick={saveSn} style={{padding:"9px 18px",background:"#FFC800",color:"#2D2D2D",border:"none",borderRadius:7,fontSize:12,fontWeight:700,cursor:"pointer"}}>📸 Save Snapshot</button>
+<button onClick={()=>dCSV([{Scenario:"Current",Weeks:coE,"Cost(EUR)":tC},...snaps.map(s=>({Scenario:s.label,Weeks:s.tw,"Cost(EUR)":s.tc}))],"scenarios.csv")} style={{padding:"9px 18px",background:"#2D2D2D",color:"#FFC800",border:"none",borderRadius:7,fontSize:12,fontWeight:600,cursor:"pointer"}}>↓ Export</button></div></div>
+<div style={{...cs(),border:"2px solid #FFC800",background:"#FFC80008"}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><h3 style={{margin:0,fontSize:13,fontWeight:700}}>📍 Current</h3><div style={{display:"flex",gap:20}}><div style={{textAlign:"center"}}><div style={{fontSize:20,fontWeight:700,fontFamily:"'JetBrains Mono'",color:"#FFC800"}}>{coE}</div><div style={{fontSize:9,color:"#888"}}>weeks</div></div><div style={{textAlign:"center"}}><div style={{fontSize:20,fontWeight:700,fontFamily:"'JetBrains Mono'"}}>{fmt(tC)} €</div><div style={{fontSize:9,color:"#888"}}>per station</div></div></div></div></div>
+{snaps.length===0?<div style={{textAlign:"center",padding:40,color:"#ccc"}}>No snapshots yet</div>:snaps.map(s=>{const wd=s.tw-coE,cd=s.tc-tC;return<div key={s.id} style={{...cs(),display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><h4 style={{margin:0,fontSize:12,fontWeight:700}}>{s.label}</h4><div style={{fontSize:10,color:"#888",marginTop:3}}>{s.as.map(a=>`${a.n}(${a.l}+${a.b}w)`).join(" · ")}</div></div><div style={{display:"flex",gap:20,alignItems:"center"}}><div style={{textAlign:"center"}}><div style={{fontSize:16,fontWeight:700,fontFamily:"'JetBrains Mono'"}}>{s.tw}w</div><div style={{fontSize:10,color:wd>0?"#E74C3C":wd<0?"#27AE60":"#888",fontWeight:600}}>{wd>0?`+${wd}`:wd<0?wd:"="}</div></div><div style={{textAlign:"center"}}><div style={{fontSize:16,fontWeight:700,fontFamily:"'JetBrains Mono'"}}>{fmt(s.tc)}€</div><div style={{fontSize:10,color:cd>0?"#E74C3C":cd<0?"#27AE60":"#888",fontWeight:600}}>{cd>0?`+${fmt(cd)}`:cd<0?`-${fmt(Math.abs(cd))}`:"="}€</div></div><button onClick={()=>sSn(p=>p.filter(x=>x.id!==s.id))} style={{padding:"3px 7px",background:"none",border:"1px solid #ddd",borderRadius:3,cursor:"pointer",fontSize:11,color:"#999"}}>✕</button></div></div>})}
+</div>}
+
+</div>
+<div style={{textAlign:"center",padding:"20px",fontSize:11,color:"#bbb",borderTop:"1px solid #eee",marginTop:20}}>Fastned Italy — Station Deployment Planner · PM Italy Case Assignment</div>
+</div>}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
